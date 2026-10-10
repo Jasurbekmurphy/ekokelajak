@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  FLUTTER_VERSION: 3.47.7
+
+jobs:
+  database:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: PostgreSQL 16 + PostGIS + pg_cron
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq postgresql-16 postgresql-16-postgis-3 postgresql-16-cron
+          conf=/etc/postgresql/16/main/postgresql.conf
+          echo "shared_preload_libraries = 'pg_cron'" | sudo tee -a $conf
+          echo "cron.database_name = 'ekokelajak_test'" | sudo tee -a $conf
+          sudo pg_ctlcluster 16 main restart
+      - name: Migratsiya va oqim sinovi
+        run: sudo -u postgres bash supabase/tests/run.sh
+
+  flutter:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Umumiy paket
+        working-directory: packages/core
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+      - name: Mobil ilova
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter analyze
+      - name: Moderator paneli
+        working-directory: admin
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter build web
+
+  apk:
+    runs-on: ubuntu-24.04
+    needs: flutter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: APK yig'ish
+        working-directory: app
+        run: |
+          # env.json bo'lmasa ilova "Supabase sozlanmagan" ekranini ko'rsatadi.
+          [ -f env.json ] || cp env.example.json env.json
+          flutter pub get
+          flutter build apk --release --dart-define-from-file=env.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ekokelajak-apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
